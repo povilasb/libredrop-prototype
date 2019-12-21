@@ -1,70 +1,27 @@
+#[macro_use]
+mod utils;
+mod proto;
+mod app_data;
+mod session;
+
 use std::net::{Ipv4Addr, SocketAddr, IpAddr};
 use std::io::{self, Write};
-use std::time::Duration;
 
 use hex;
 use regex::Regex;
 use simple_logger;
 use unwrap::unwrap;
-use futures::{StreamExt, SinkExt};
+use futures::StreamExt;
 use log::{self, info, debug};
 use get_if_addrs;
 use async_std::{task, sync};
 use async_std::net::{TcpListener, TcpStream};
-use async_std::fs::File;
 use async_std::io as aio;
-use async_std::io::prelude::{ReadExt, WriteExt};
-use serde::{Serialize, Deserialize};
-use futures_codec::{Framed, SerdeCodec};
 
 use peer_discovery::{discover_peers, DiscoveryMsg, TransportProtocol};
 
-/// Prints given formatted string and prompts for input again.
-macro_rules! out {
-    ($($arg:tt)*) => ({
-        print!("\r");
-        println!($($arg)*);
-        print!("\r> ");
-        unwrap!(io::stdout().flush());
-    });
-}
-
-type PeerId = [u8; 16];
-
-#[derive(Serialize, Deserialize, Debug)]
-struct FileRequest {
-    sender_id: PeerId,
-    name: String,
-    file_size: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-enum LibredropMsg {
-    FileSendRequest(FileRequest),
-    FileAccept,
-    FileReject,
-}
-
-/// Misc app events.
-enum Event {
-    AppStarted,
-    Stdin(String),
-    PeerDiscovered(DiscoveryMsg),
-    IncomingConnection(TcpStream),
-    SendFileRequest(FileRequest),
-    /// Allows async tasks to set the app state.
-    SetState(State),
-    Quit,
-}
-
-/// Internal app state.
-#[derive(Debug)]
-enum State {
-    /// Regular app state, nothing special. This is the default.
-    Normal,
-    /// We received request to send a file to us, waiting for us to confirm.
-    AwaitingFileAccept,
-}
+use crate::proto::PeerId;
+use crate::app_data::{Event, State};
 
 /// An app built on top of homebrew async event bus.
 struct App {
@@ -158,72 +115,21 @@ impl App {
             out!("Sending {} to {}", file_path, peer_addr);
 
             let our_id = self.our_id;
-
-            let task: task::JoinHandle<aio::Result<()>> = task::spawn(async move {
-                let f = File::open(file_path.clone()).await?;
-                let file_size = f.metadata().await?.len() as usize;
-                let file_request = FileRequest {
-                    sender_id: our_id,
-                    name: file_path,
-                    file_size,
-                };
-
-                let mut stream = TcpStream::connect(peer_addr).await?;
-                let mut framed = Framed::new(stream, SerdeCodec::default());
-                framed.send(LibredropMsg::FileSendRequest(file_request)).await.unwrap();
-
-                if let Some(msg) = framed.next().await {
-                    let msg = unwrap!(msg);
-                    match msg {
-                        LibredropMsg::FileAccept => {
-                            out!("File was accepted");
-                        }
-                        LibredropMsg::FileReject => {
-                            out!("File was rejected");
-                        }
-                        msg => out!("Unexpected message from peer: {:?}", msg),
-                    }
-                }
-
-                Ok(())
+            let _: task::JoinHandle<aio::Result<()>> = task::spawn(async move {
+                session::conn_send(peer_addr, file_path, our_id).await
             });
         } else {
             out!("Ivalid send file command.");
         }
     }
 
-    async fn on_incoming_conn(&mut self, mut stream: TcpStream) {
-        // TODO(povilas): spawn conn handler
+    async fn on_incoming_conn(&mut self, stream: TcpStream) {
         out!("New conn accepted: {}", unwrap!(stream.peer_addr()));
-
-        let mut framed = Framed::new(stream, SerdeCodec::<LibredropMsg>::default());
-        // TODO(povilas): timeout
-        if let Some(msg) = framed.next().await {
-            let msg = unwrap!(msg);
-            let file_req = match msg {
-                LibredropMsg::FileSendRequest(file_req) => file_req,
-                msg => panic!("Unexpected message: {:?}", msg),
-            };
-
-            out!("{:?} wants to send '{}'. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
-                 file_req.name);
-            self.state = State::AwaitingFileAccept;
-
-            let accept_rx = self.accept_rx.clone();
-            let tx = self.tx.clone();
-            let task: task::JoinHandle<aio::Result<()>> = task::spawn(async move {
-                if let Some(accepted) = accept_rx.recv().await {
-                    if accepted {
-                        let _ = unwrap!(framed.send(LibredropMsg::FileAccept).await);
-                    } else {
-                        let _ = unwrap!(framed.send(LibredropMsg::FileReject).await);
-                    }
-                    tx.send(Event::SetState(State::Normal)).await;
-                }
-
-                Ok(())
-            });
-        }
+        let tx = self.tx.clone();
+        let accept_rx = self.accept_rx.clone();
+        let _: task::JoinHandle<_> = task::spawn(async move {
+            session::handle_incoming_conn(stream, tx, accept_rx).await
+        });
     }
 
     /// The heart of our demo app.
@@ -236,7 +142,6 @@ impl App {
                 Some(Event::Stdin(line)) => self.on_stdin(line).await,
                 Some(Event::PeerDiscovered(msg)) => self.on_peer_discovered(msg).await,
                 Some(Event::IncomingConnection(stream)) => self.on_incoming_conn(stream).await,
-                Some(Event::SendFileRequest(req)) => (),
                 Some(Event::Quit) => break,
                 Some(Event::SetState(state)) => self.state = state,
                 None => {
