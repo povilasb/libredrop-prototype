@@ -127,9 +127,9 @@ impl App {
         out!("New conn accepted: {}", unwrap!(stream.peer_addr()));
         let tx = self.tx.clone();
         let accept_rx = self.accept_rx.clone();
-        let _: task::JoinHandle<_> = task::spawn(async move {
-            session::handle_incoming_conn(stream, tx, accept_rx).await
-        });
+        let _: task::JoinHandle<_> = task::spawn(
+            session::handle_incoming_conn(stream, tx, accept_rx)
+        );
     }
 
     /// The heart of our demo app.

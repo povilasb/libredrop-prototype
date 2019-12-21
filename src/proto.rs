@@ -16,4 +16,5 @@ pub enum LibredropMsg {
     FileSendRequest(FileRequest),
     FileAccept,
     FileReject,
+    FileChunk(Vec<u8>),
 }

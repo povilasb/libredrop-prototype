@@ -3,12 +3,15 @@
 use async_std::net::{TcpStream, SocketAddr};
 use async_std::fs::File;
 use async_std::{io, sync};
+use async_std::io::prelude::{ReadExt, WriteExt};
 use futures_codec::{Framed, SerdeCodec};
 use futures::{StreamExt, SinkExt};
 use unwrap::unwrap;
 
 use crate::proto::{FileRequest, LibredropMsg, PeerId};
 use crate::app_data::{Event, State};
+
+const FILE_READ_BUFF_SIZE: usize = 4096;
 
 /// Connects to given peer and attempts to send a file to him.
 pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId) -> io::Result<()> {
@@ -28,7 +31,8 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
         let msg = unwrap!(msg);
         match msg {
             LibredropMsg::FileAccept => {
-                out!("File was accepted");
+                out!("File was accepted. Sending..");
+                send_file(framed, f).await?;
             }
             LibredropMsg::FileReject => {
                 out!("File was rejected");
@@ -40,28 +44,75 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
     Ok(())
 }
 
+async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut f: File) -> io::Result<()> {
+    let mut buf = vec![0u8; FILE_READ_BUFF_SIZE];
+
+    loop {
+        let bytes_read = f.read(&mut buf).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        // TODO(povilas): use send_all?
+        let msg = LibredropMsg::FileChunk(buf[..bytes_read].to_vec());
+        let _ = framed.send(msg).await?;
+    }
+    Ok(())
+}
+
 pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Event>,
                                   accept_rx: sync::Receiver<bool>) {
     let mut framed = Framed::new(stream, SerdeCodec::<LibredropMsg>::default());
     // TODO(povilas): timeout
-    if let Some(msg) = framed.next().await {
-        let msg = unwrap!(msg);
-        let file_req = match msg {
-            LibredropMsg::FileSendRequest(file_req) => file_req,
-            msg => panic!("Unexpected message: {:?}", msg),
-        };
+    let msg = if let Some(msg) = framed.next().await {
+        unwrap!(msg)
+    } else {
+        return;
+    };
 
-        event_tx.send(Event::SetState(State::AwaitingFileAccept)).await;
-        out!("{:?} wants to send '{}'. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
-             file_req.name);
+    let file_req = match msg {
+        LibredropMsg::FileSendRequest(file_req) => file_req,
+        msg => panic!("Unexpected message: {:?}", msg),
+    };
 
-        if let Some(accepted) = accept_rx.recv().await {
-            if accepted {
-                let _ = unwrap!(framed.send(LibredropMsg::FileAccept).await);
-            } else {
-                let _ = unwrap!(framed.send(LibredropMsg::FileReject).await);
-            }
-            event_tx.send(Event::SetState(State::Normal)).await;
+    event_tx.send(Event::SetState(State::AwaitingFileAccept)).await;
+    // NOTE: this is actually a race condition: I should wait until
+    // I'm sure App has processed SetState. In practice, this probably won't be
+    // an issue.
+    out!("{:?} wants to send '{}'. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
+         file_req.name);
+
+    let recv_file = if let Some(accepted) = accept_rx.recv().await {
+        if accepted {
+            let _ = unwrap!(framed.send(LibredropMsg::FileAccept).await);
+        } else {
+            let _ = unwrap!(framed.send(LibredropMsg::FileReject).await);
         }
+        accepted
+    } else {
+        out!("Connection dropped");
+        false
+    };
+    event_tx.send(Event::SetState(State::Normal)).await;
+
+    if recv_file {
+        let mut f = unwrap!(File::create("vault/".to_string() + &file_req.name).await);
+        let mut bytes_received: usize = 0;
+
+        while let Some(msg) = framed.next().await {
+            let data = match unwrap!(msg) {
+                LibredropMsg::FileChunk(data) => data,
+                msg => {
+                    out!("Unexpected message from peer: {:?}", msg);
+                    vec![]
+                }
+            };
+            bytes_received += data.len();
+            // NOTE: if I put this statement inside FileChunk arm, rustc won't compile
+            // because of some arcane generics issue.
+            // Could be a compiler bug, idk.
+            unwrap!(f.write_all(&data).await);
+        }
+        out!("File received. Size: {}b", bytes_received);
     }
 }
