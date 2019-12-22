@@ -136,7 +136,7 @@ pub async fn handle_incoming_conn(
             // because of some arcane generics issue.
             // Could be a compiler bug, idk.
             unwrap!(f.write_all(&data).await);
-            pb.inc(bytes_received as u64);
+            pb.set_position(bytes_received as u64);
         }
 
         pb.finish_with_message("Received");
