@@ -5,7 +5,7 @@ authors = ["Povilas Balciunas <balciunas90@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-peer-discovery = { path = "../peer-discovery-rust" }
+peer-discovery = { git = "https://github.com/libredrop/peer-discovery-rust", rev = "07709c3" }
 unwrap = "1.2.1"
 get_if_addrs = "0.5.3"
 simple_logger = "1.3.0"
