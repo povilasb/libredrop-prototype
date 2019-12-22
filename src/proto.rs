@@ -1,6 +1,6 @@
 //! Networking protocol.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub type PeerId = [u8; 16];
 

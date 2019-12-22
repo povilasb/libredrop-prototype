@@ -1,27 +1,27 @@
 #[macro_use]
 mod utils;
-mod proto;
 mod app_data;
+mod proto;
 mod session;
 
-use std::net::{Ipv4Addr, SocketAddr, IpAddr};
 use std::io::{self, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use async_std::io as aio;
+use async_std::net::{TcpListener, TcpStream};
+use async_std::{sync, task};
+use futures::StreamExt;
+use get_if_addrs;
 use hex;
+use log::{self, debug, info};
 use regex::Regex;
 use simple_logger;
 use unwrap::unwrap;
-use futures::StreamExt;
-use log::{self, info, debug};
-use get_if_addrs;
-use async_std::{task, sync};
-use async_std::net::{TcpListener, TcpStream};
-use async_std::io as aio;
 
 use peer_discovery::{discover_peers, DiscoveryMsg, TransportProtocol};
 
-use crate::proto::PeerId;
 use crate::app_data::{Event, State};
+use crate::proto::PeerId;
 
 /// An app built on top of homebrew async event bus.
 struct App {
@@ -115,9 +115,8 @@ impl App {
             out!("Sending {} to {}", file_path, peer_addr);
 
             let our_id = self.our_id;
-            let _: task::JoinHandle<aio::Result<()>> = task::spawn(async move {
-                session::conn_send(peer_addr, file_path, our_id).await
-            });
+            let _: task::JoinHandle<aio::Result<()>> =
+                task::spawn(async move { session::conn_send(peer_addr, file_path, our_id).await });
         } else {
             out!("Ivalid send file command.");
         }
@@ -127,9 +126,8 @@ impl App {
         out!("New conn accepted: {}", unwrap!(stream.peer_addr()));
         let tx = self.tx.clone();
         let accept_rx = self.accept_rx.clone();
-        let _: task::JoinHandle<_> = task::spawn(
-            session::handle_incoming_conn(stream, tx, accept_rx)
-        );
+        let _: task::JoinHandle<_> =
+            task::spawn(session::handle_incoming_conn(stream, tx, accept_rx));
     }
 
     /// The heart of our demo app.
@@ -219,7 +217,6 @@ fn print_help(our_id: PeerId) {
     unwrap!(io::stdout().flush());
 }
 
-
 /// Returns peer number and file path to send to the peer or None if given string is invalid send
 /// command.
 fn parse_send(cmd: &str) -> Option<(usize, String)> {
@@ -234,7 +231,8 @@ fn my_ip() -> Ipv4Addr {
     let net_interfaces = unwrap!(get_if_addrs::get_if_addrs());
     // It's eth0 on Docker container, will have to change this when running on host
     // machine.
-    let eth0 = unwrap!(net_interfaces.iter()
+    let eth0 = unwrap!(net_interfaces
+        .iter()
         .find(|interface| interface.name == "eth0"));
     unwrap!(get_ipv4_addr(eth0))
 }

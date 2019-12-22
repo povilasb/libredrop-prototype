@@ -1,16 +1,16 @@
 //! Handles TCP session between 2 peers.
 
-use async_std::net::{TcpStream, SocketAddr};
 use async_std::fs::File;
-use async_std::{io, sync};
 use async_std::io::prelude::{ReadExt, WriteExt};
+use async_std::net::{SocketAddr, TcpStream};
+use async_std::{io, sync};
+use futures::{SinkExt, StreamExt};
 use futures_codec::{Framed, SerdeCodec};
-use futures::{StreamExt, SinkExt};
-use unwrap::unwrap;
 use indicatif::{ProgressBar, ProgressStyle};
+use unwrap::unwrap;
 
-use crate::proto::{FileRequest, LibredropMsg, PeerId};
 use crate::app_data::{Event, State};
+use crate::proto::{FileRequest, LibredropMsg, PeerId};
 
 const FILE_READ_BUFF_SIZE: usize = 1024 * 32;
 
@@ -26,7 +26,10 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
 
     let stream = TcpStream::connect(peer_addr).await?;
     let mut framed = Framed::new(stream, SerdeCodec::default());
-    framed.send(LibredropMsg::FileSendRequest(file_request)).await.unwrap();
+    framed
+        .send(LibredropMsg::FileSendRequest(file_request))
+        .await
+        .unwrap();
 
     if let Some(msg) = framed.next().await {
         let msg = unwrap!(msg);
@@ -46,8 +49,11 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
     Ok(())
 }
 
-async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut f: File,
-                   pb: ProgressBar) -> io::Result<()> {
+async fn send_file(
+    mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>,
+    mut f: File,
+    pb: ProgressBar,
+) -> io::Result<()> {
     let mut buf = vec![0u8; FILE_READ_BUFF_SIZE];
 
     loop {
@@ -68,8 +74,11 @@ async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut 
     Ok(())
 }
 
-pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Event>,
-                                  accept_rx: sync::Receiver<bool>) {
+pub async fn handle_incoming_conn(
+    stream: TcpStream,
+    event_tx: sync::Sender<Event>,
+    accept_rx: sync::Receiver<bool>,
+) {
     let mut framed = Framed::new(stream, SerdeCodec::<LibredropMsg>::default());
     // TODO(povilas): timeout
     let msg = if let Some(msg) = framed.next().await {
@@ -83,12 +92,18 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
         msg => panic!("Unexpected message: {:?}", msg),
     };
 
-    event_tx.send(Event::SetState(State::AwaitingFileAccept)).await;
+    event_tx
+        .send(Event::SetState(State::AwaitingFileAccept))
+        .await;
     // NOTE: this is actually a race condition: I should wait until
     // I'm sure App has processed SetState. In practice, this probably won't be
     // an issue.
-    out!("{:?} wants to send '{}', size: {}. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
-         file_req.name, file_req.file_size);
+    out!(
+        "{:?} wants to send '{}', size: {}. Accept? y/n: ",
+        hex::encode(&file_req.sender_id[0..5]),
+        file_req.name,
+        file_req.file_size
+    );
 
     let recv_file = if let Some(accepted) = accept_rx.recv().await {
         if accepted {
