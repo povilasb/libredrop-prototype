@@ -7,6 +7,7 @@ use async_std::io::prelude::{ReadExt, WriteExt};
 use futures_codec::{Framed, SerdeCodec};
 use futures::{StreamExt, SinkExt};
 use unwrap::unwrap;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::proto::{FileRequest, LibredropMsg, PeerId};
 use crate::app_data::{Event, State};
@@ -32,7 +33,8 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
         match msg {
             LibredropMsg::FileAccept => {
                 out!("File was accepted. Sending..");
-                send_file(framed, f).await?;
+                let pb = make_progress_bar(file_size);
+                send_file(framed, f, pb).await?;
             }
             LibredropMsg::FileReject => {
                 out!("File was rejected");
@@ -44,8 +46,10 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
     Ok(())
 }
 
-async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut f: File) -> io::Result<()> {
+async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut f: File,
+                   pb: ProgressBar) -> io::Result<()> {
     let mut buf = vec![0u8; FILE_READ_BUFF_SIZE];
+
 
     loop {
         let bytes_read = f.read(&mut buf).await?;
@@ -56,7 +60,12 @@ async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut 
         // TODO(povilas): use send_all?
         let msg = LibredropMsg::FileChunk(buf[..bytes_read].to_vec());
         let _ = framed.send(msg).await?;
+        pb.inc(bytes_read as u64);
     }
+
+    pb.finish_with_message("Sent");
+    out!();
+
     Ok(())
 }
 
@@ -81,6 +90,8 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
     // an issue.
     out!("{:?} wants to send '{}'. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
          file_req.name);
+
+    let pb = make_progress_bar(file_req.file_size);
 
     let recv_file = if let Some(accepted) = accept_rx.recv().await {
         if accepted {
@@ -112,7 +123,18 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
             // because of some arcane generics issue.
             // Could be a compiler bug, idk.
             unwrap!(f.write_all(&data).await);
+            pb.inc(bytes_received as u64);
         }
+
+        pb.finish_with_message("Received");
         out!("File received. Size: {}b", bytes_received);
     }
+}
+
+fn make_progress_bar(file_size: usize) -> ProgressBar {
+    let pb = ProgressBar::new(file_size as u64);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+        .progress_chars("#>-"));
+    pb
 }
