@@ -231,10 +231,16 @@ fn my_ip() -> Ipv4Addr {
     let net_interfaces = unwrap!(get_if_addrs::get_if_addrs());
     // It's eth0 on Docker container, will have to change this when running on host
     // machine.
-    let eth0 = unwrap!(net_interfaces
+    let main_if = net_interfaces
         .iter()
-        .find(|interface| interface.name == "eth0"));
-    unwrap!(get_ipv4_addr(eth0))
+        .find(|interface| is_main_interface(interface))
+        .expect("Network interface not found");
+    unwrap!(get_ipv4_addr(main_if))
+}
+
+fn is_main_interface(interface: &get_if_addrs::Interface) -> bool {
+    interface.name.starts_with("eth") || interface.name.starts_with("en") ||
+        interface.name.starts_with("wlp")
 }
 
 fn get_ipv4_addr(interface: &get_if_addrs::Interface) -> Option<Ipv4Addr> {
