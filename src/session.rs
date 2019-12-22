@@ -12,7 +12,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::proto::{FileRequest, LibredropMsg, PeerId};
 use crate::app_data::{Event, State};
 
-const FILE_READ_BUFF_SIZE: usize = 4096;
+const FILE_READ_BUFF_SIZE: usize = 1024 * 32;
 
 /// Connects to given peer and attempts to send a file to him.
 pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId) -> io::Result<()> {
@@ -49,7 +49,6 @@ pub async fn conn_send(peer_addr: SocketAddr, file_path: String, our_id: PeerId)
 async fn send_file(mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>, mut f: File,
                    pb: ProgressBar) -> io::Result<()> {
     let mut buf = vec![0u8; FILE_READ_BUFF_SIZE];
-
 
     loop {
         let bytes_read = f.read(&mut buf).await?;
@@ -88,10 +87,8 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
     // NOTE: this is actually a race condition: I should wait until
     // I'm sure App has processed SetState. In practice, this probably won't be
     // an issue.
-    out!("{:?} wants to send '{}'. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
-         file_req.name);
-
-    let pb = make_progress_bar(file_req.file_size);
+    out!("{:?} wants to send '{}', size: {}. Accept? y/n: ", hex::encode(&file_req.sender_id[0..5]),
+         file_req.name, file_req.file_size);
 
     let recv_file = if let Some(accepted) = accept_rx.recv().await {
         if accepted {
@@ -109,6 +106,7 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
     if recv_file {
         let mut f = unwrap!(File::create("vault/".to_string() + &file_req.name).await);
         let mut bytes_received: usize = 0;
+        let pb = make_progress_bar(file_req.file_size);
 
         while let Some(msg) = framed.next().await {
             let data = match unwrap!(msg) {
@@ -127,7 +125,7 @@ pub async fn handle_incoming_conn(stream: TcpStream, event_tx: sync::Sender<Even
         }
 
         pb.finish_with_message("Received");
-        out!("File received. Size: {}b", bytes_received);
+        out!("File received. Size: {}", bytes_received);
     }
 }
 
