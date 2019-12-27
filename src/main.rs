@@ -21,7 +21,7 @@ use unwrap::unwrap;
 use peer_discovery::{discover_peers, DiscoveryMsg, TransportProtocol};
 
 use crate::app_data::{Event, State};
-use crate::proto::PeerId;
+use crate::proto::{PeerId, ReceiverSM, SenderSM};
 
 /// An app built on top of homebrew async event bus.
 struct App {
@@ -115,8 +115,23 @@ impl App {
             out!("Sending {} to {}", file_path, peer_addr);
 
             let our_id = self.our_id;
-            let _: task::JoinHandle<aio::Result<()>> =
-                task::spawn(async move { session::conn_send(peer_addr, file_path, our_id).await });
+            let _: task::JoinHandle<()> = task::spawn(async move {
+                match session::conn_send(peer_addr, file_path, our_id).await {
+                    Err(e) => out!("Sending file failed, I/O error: {}", e),
+                    Ok(SenderSM::Done(_)) => {
+                        out!("File was sent successfully");
+                    }
+                    Ok(SenderSM::Rejected(_)) => {
+                        out!("File was rejected");
+                    }
+                    Ok(SenderSM::Failed(state)) => {
+                        out!("Unexpected message from peer: {:?}", state.err);
+                    }
+                    other => {
+                        out!("Unexpected state: {:?}", other);
+                    }
+                }
+            });
         } else {
             out!("Ivalid send file command.");
         }
@@ -126,8 +141,23 @@ impl App {
         out!("New conn accepted: {}", unwrap!(stream.peer_addr()));
         let tx = self.tx.clone();
         let accept_rx = self.accept_rx.clone();
-        let _: task::JoinHandle<_> =
-            task::spawn(session::handle_incoming_conn(stream, tx, accept_rx));
+        let _: task::JoinHandle<()> = task::spawn(async move {
+            match session::handle_incoming_conn(stream, tx, accept_rx).await {
+                Err(e) => out!("Receiving file failed, I/O error: {}", e),
+                Ok(ReceiverSM::Done(state)) => {
+                    out!("File received. Size: {}", state.bytes_received);
+                }
+                Ok(ReceiverSM::Rejected(_)) => {
+                    out!("I don't want this file. Closing connection...");
+                }
+                Ok(ReceiverSM::Failed(state)) => {
+                    out!("Unexpected message from peer: {:?}", state.err);
+                }
+                other => {
+                    out!("Unexpected state: {:?}", other);
+                }
+            }
+        });
     }
 
     /// The heart of our demo app.
