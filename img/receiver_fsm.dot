@@ -1,0 +1,9 @@
+digraph Receiver {
+WaitingFile -> WaitingAccept [ label = "FileRequest" ];
+WaitingFile -> Failed [ label = "Invalid message" ] ;
+WaitingAccept -> Rejected [ label = "Reject" ];
+WaitingAccept -> Accepted [ label = "Accept" ];
+Accepted -> ReceivingFile [ label = "Transition" ];
+ReceivingFile -> Done [ label = "All FileChunk transferred" ]
+ReceivingFile -> Failed [ label = "Invalid message" ];
+}

@@ -68,3 +68,11 @@ File will be stored in `./vault/` dir when download is complete.
     |---------------------------------------------------->|                   |
     |                                                     |                   |
 ```
+
+Sender state machine:
+
+![sender_fsm](img/sender_fsm.png)
+
+Receiver state machine:
+
+![receiver_fsm](img/receiver_fsm.png)

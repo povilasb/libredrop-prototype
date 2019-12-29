@@ -1,0 +1,6 @@
+digraph Sender {
+WaitingAccept -> SendingFile [ label = "FileAccept" ];
+WaitingAccept -> Rejected [ label = "FileReject" ];
+WaitingAccept -> Failed [ label = "Invalid message" ] ;
+SendingFile -> Done [ label = "All FileChunk sent" ] ;
+}
