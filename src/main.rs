@@ -124,8 +124,8 @@ impl App {
                     Ok(SenderSM::Rejected(_)) => {
                         out!("File was rejected");
                     }
-                    Ok(SenderSM::Failed(state)) => {
-                        out!("Unexpected message from peer: {:?}", state.err);
+                    Ok(SenderSM::Error) => {
+                        out!("Unexpected message from peer");
                     }
                     other => {
                         out!("Unexpected state: {:?}", other);
@@ -269,8 +269,9 @@ fn my_ip() -> Ipv4Addr {
 }
 
 fn is_main_interface(interface: &get_if_addrs::Interface) -> bool {
-    interface.name.starts_with("eth") || interface.name.starts_with("en") ||
-        interface.name.starts_with("wlp")
+    interface.name.starts_with("eth")
+        || interface.name.starts_with("en")
+        || interface.name.starts_with("wlp")
 }
 
 fn get_ipv4_addr(interface: &get_if_addrs::Interface) -> Option<Ipv4Addr> {

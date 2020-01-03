@@ -1,18 +1,19 @@
 //! Networking protocol.
 
 use err_derive::Error;
+use machine::{machine, transitions};
 use serde::{Deserialize, Serialize};
 
 pub type PeerId = [u8; 16];
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FileRequest {
     pub sender_id: PeerId,
     pub name: String,
     pub file_size: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LibredropMsg {
     FileSendRequest(FileRequest),
     FileAccept,
@@ -27,75 +28,42 @@ pub enum Error {
     UnexpectedPacket(LibredropMsg, &'static str),
 }
 
-/// State machine of a peer that sends file.
-#[derive(Debug)]
-pub enum SenderSM {
-    WaitingAccept(WaitingAccept),
-    SendingFile(SendingFile),
-    Rejected(Rejected),
-    Done(Done),
-    Failed(Failed),
-}
+/// A marker used to notify about the end of file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEof;
 
-impl SenderSM {
-    pub fn wait_accept() -> Self {
-        SenderSM::WaitingAccept(WaitingAccept {})
+machine!(
+    /// State machine of a peer that sends file.
+    #[derive(Debug)]
+    enum SenderSM {
+        WaitingAccept,
+        /// In progress of sending file chunks. You can feed `[u8]` data and get `LibredropMsg`
+        /// packets from this state.
+        // TODO(povilas): use smth smarter, like rope structure?
+        SendingFile {
+            data: Vec<Vec<u8>>,
+        },
+        Rejected,
+        Done,
     }
+);
 
-    pub fn on_packet(self, packet: LibredropMsg) -> Self {
-        match self {
-            SenderSM::WaitingAccept(state) => state.on_packet(packet),
-            SenderSM::SendingFile(_) => SenderSM::Failed(Failed::with_error(
-                Error::UnexpectedPacket(packet, "SendingFile"),
-            )),
-            state => state, // if we're in Done, Failed or Rejected already
-        }
-    }
-}
-
-/// Waiting for user to accept file.
-#[derive(Debug)]
-pub struct WaitingAccept {}
+transitions!(SenderSM,
+    [
+        (WaitingAccept, LibredropMsg) => [SendingFile, Error, Rejected],
+        (SendingFile, FileEof) => Done
+    ]
+);
 
 impl WaitingAccept {
-    pub fn on_packet(self, packet: LibredropMsg) -> SenderSM {
-        match packet {
+    pub fn on_libredrop_msg(self, msg: LibredropMsg) -> SenderSM {
+        match msg {
             LibredropMsg::FileAccept => SenderSM::SendingFile(SendingFile::new()),
             LibredropMsg::FileReject => SenderSM::Rejected(Rejected {}),
-            other => SenderSM::Failed(Failed::with_error(Error::UnexpectedPacket(
-                other,
-                "WaitingAccept",
-            ))),
+            // TODO(povilas): add metadata to error state
+            _ => SenderSM::Error,
         }
     }
-}
-
-/// File was rejected
-#[derive(Debug)]
-pub struct Rejected {}
-
-/// Sending/receiving file is complete.
-#[derive(Debug)]
-pub struct Done {}
-
-/// Peer has failed.
-#[derive(Debug)]
-pub struct Failed {
-    pub err: Error,
-}
-
-impl Failed {
-    pub fn with_error(err: Error) -> Self {
-        Self { err }
-    }
-}
-
-/// In progress of sending file chunks.
-/// You can feed `[u8]` data and get `LibredropMsg` packets from this state.
-#[derive(Debug)]
-pub struct SendingFile {
-    // TODO(povilas): use smth smarter, like rope structure?
-    data: Vec<Vec<u8>>,
 }
 
 impl SendingFile {
@@ -103,6 +71,10 @@ impl SendingFile {
         Self {
             data: Default::default(),
         }
+    }
+
+    pub fn on_file_eof(self, _: FileEof) -> Done {
+        Done {}
     }
 
     /// Buffer data to send.
@@ -113,10 +85,6 @@ impl SendingFile {
     /// Returns next file chunk packet to send to the other peer.
     pub fn next_packet(&mut self) -> Option<LibredropMsg> {
         self.data.pop().map(LibredropMsg::FileChunk)
-    }
-
-    pub fn done(self) -> Done {
-        Done {}
     }
 }
 
@@ -153,6 +121,18 @@ impl ReceiverSM {
             }),
             state => state, // if we're in Done, Failed or Rejected, etc. already
         }
+    }
+}
+
+/// Peer has failed.
+#[derive(Debug)]
+pub struct Failed {
+    pub err: Error,
+}
+
+impl Failed {
+    pub fn with_error(err: Error) -> Self {
+        Self { err }
     }
 }
 

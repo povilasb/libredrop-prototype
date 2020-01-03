@@ -1,5 +1,3 @@
-//! Handles TCP session between 2 peers.
-
 use async_std::fs::File;
 use async_std::io::prelude::{ReadExt, WriteExt};
 use async_std::net::{SocketAddr, TcpStream};
@@ -10,7 +8,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use unwrap::unwrap;
 
 use crate::app_data::{Event, State};
-use crate::proto::{Done, FileRequest, LibredropMsg, PeerId, ReceiverSM, SenderSM, SendingFile};
+use crate::proto::{
+    Done, FileEof, FileRequest, LibredropMsg, PeerId, ReceiverSM, SenderSM, SendingFile,
+};
 
 const FILE_READ_BUFF_SIZE: usize = 1024 * 32;
 
@@ -31,19 +31,20 @@ pub async fn conn_send(
     let stream = TcpStream::connect(peer_addr).await?;
     let mut framed = Framed::new(stream, SerdeCodec::default());
 
-    let sender_sm = SenderSM::wait_accept();
+    // TODO(povilas): accept FileRequest
+    let sender_sm = SenderSM::waiting_accept();
+    // TODO(povilas): sender_sm.next_package()
     framed
         .send(LibredropMsg::FileSendRequest(file_request))
         .await?;
 
     if let Some(msg) = framed.next().await {
         let msg = unwrap!(msg);
-        let sender_sm = sender_sm.on_packet(msg);
+        let sender_sm = sender_sm.on_libredrop_msg(msg);
         match sender_sm {
             SenderSM::SendingFile(state) => {
                 out!("File was accepted. Sending..");
                 let pb = make_progress_bar(file_size);
-
                 Ok(SenderSM::Done(send_file(framed, f, pb, state).await?))
             }
             other => Ok(other),
@@ -77,7 +78,7 @@ async fn send_file(
     pb.finish_with_message("Sent");
     out!();
 
-    Ok(sender_state.done())
+    Ok(sender_state.on_file_eof(FileEof))
 }
 
 struct FileCtx {
