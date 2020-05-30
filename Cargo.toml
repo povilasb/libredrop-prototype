@@ -1,5 +1,5 @@
 [package]
-name = "async-demo"
+name = "libredrop-prototype"
 version = "0.1.0"
 authors = ["Povilas Balciunas <balciunas90@gmail.com>"]
 edition = "2018"
@@ -20,6 +20,10 @@ indicatif = "0.13.0"
 err-derive = "0.2.1"
 machine = "0.3.0"
 futures_codec = { git = 'https://github.com/povilasb/futures-codec', branch = 'serde-codec'}
+prost = "0.6.1"
+
+[build-dependencies]
+prost-build = "0.6.1"
 
 [dependencies.serde]
 version = "1.0.103"

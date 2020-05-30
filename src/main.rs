@@ -39,9 +39,40 @@ struct App {
     state: State,
 }
 
+use prost::Message;
+
+pub mod protobuff {
+    include!(concat!(env!("OUT_DIR"), "/libredrop.message.rs"));
+}
+
+use protobuff::{LibredropMsg, libredrop_msg};
+
+fn demo_proto_msg() {
+    let my_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+    let mut msg = LibredropMsg::default();
+    // msg.variant = Some(libredrop_msg::Variant::FileAccept(proto::FileAccept{}));
+    msg.variant = Some(libredrop_msg::Variant::FileRequest(
+        protobuff::FileRequest{sender_id: my_id.to_vec(), file_name: "hello.txt".to_string(), file_size: 5}
+    ));
+
+    println!("Message: {:?}", msg);
+    println!("Length on wire: {}", msg.encoded_len());
+
+    let mut out_buff = vec![];
+    msg.encode_length_delimited(&mut out_buff).unwrap();
+    println!("Will send over wire: {:?}", out_buff);
+
+    // Skip 1 byte since it's not part of the protobuff message.
+    let received_msg = LibredropMsg::decode(&out_buff[1..]).unwrap();
+    println!("Decoded: {:?}", received_msg);
+}
+
 #[async_std::main]
 async fn main() {
     unwrap!(simple_logger::init_with_level(log::Level::Info));
+
+    demo_proto_msg();
 
     App::new().run().await;
 }
