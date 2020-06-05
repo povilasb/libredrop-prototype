@@ -4,6 +4,14 @@ use err_derive::Error;
 use machine::{machine, transitions};
 use serde::{Deserialize, Serialize};
 
+pub mod protobuff {
+    include!(concat!(env!("OUT_DIR"), "/libredrop.message.rs"));
+}
+
+/// Protocol version.
+/// 0 is prototype version - anything can break at any time.
+pub const VERSION: u16 = 0;
+
 pub type PeerId = [u8; 16];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -13,6 +21,7 @@ pub struct FileRequest {
     pub file_size: usize,
 }
 
+// TODO(povilas): replace with protobuff::LibredropMsg
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum LibredropMsg {
     FileSendRequest(FileRequest),
@@ -249,4 +258,36 @@ impl ReceivingFile {
 #[derive(Debug)]
 pub struct ReceiverDone {
     pub bytes_received: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protobuff::LibredropMsg;
+    use protobuff::libredrop_msg::Variant;
+    use prost::Message;
+
+    #[test]
+    fn encode_decode_msg() {
+        let my_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].to_vec();
+
+        let mut msg = LibredropMsg::default();
+        msg.variant = Some(Variant::FileRequest(
+            protobuff::FileRequest{sender_id: my_id.clone(), file_name: "hello.txt".to_string(), file_size: 5}
+        ));
+
+        let mut out_buff = vec![];
+        msg.encode_length_delimited(&mut out_buff).unwrap();
+
+        // Skip 1 byte since it's not part of the protobuff message.
+        let received_msg = LibredropMsg::decode(&out_buff[1..]).unwrap();
+        match received_msg.variant {
+            Some(Variant::FileRequest(file_req)) => {
+                assert_eq!(file_req.sender_id, my_id);
+                assert_eq!(file_req.file_size, 5);
+                assert_eq!(file_req.file_name, "hello.txt".to_string());
+            },
+            other => panic!("Unexpected message: {:?}", other)
+        }
+    }
 }
