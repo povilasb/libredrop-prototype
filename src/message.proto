@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package libredrop.message;
+
+
+message FileRequest {
+    // Protobuff doesn't support fixed size byte array so I can't have
+    // [u8; 16] as ID, hence any sized bytes.
+    bytes sender_id = 1;
+    string file_name = 2;
+    uint64 file_size = 3;
+}
+
+message FileAccept {}
+message FileReject {}
+message FileChunk {
+    bytes content = 1;
+}
+
+message LibredropMsg {
+    oneof variant {
+        FileRequest file_request = 1;
+        FileAccept file_accept = 2;
+        FileReject file_reject = 3;
+        FileChunk file_chunk = 4;
+    }
+}
