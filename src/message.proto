@@ -21,6 +21,7 @@ message LibredropMsg {
     oneof variant {
         FileRequest file_request = 1;
         FileAccept file_accept = 2;
-        FileChunk file_chunk = 3;
+        FileReject file_reject = 3;
+        FileChunk file_chunk = 4;
     }
 }

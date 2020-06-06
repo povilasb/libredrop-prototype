@@ -2,11 +2,15 @@
 
 use err_derive::Error;
 use machine::{machine, transitions};
-use serde::{Deserialize, Serialize};
+use prost::Message;
+use unwrap::unwrap;
+use bytes::Bytes;
 
 pub mod protobuff {
     include!(concat!(env!("OUT_DIR"), "/libredrop.message.rs"));
 }
+
+pub use protobuff::{libredrop_msg, FileRequest};
 
 /// Protocol version.
 /// 0 is prototype version - anything can break at any time.
@@ -14,20 +18,49 @@ pub const VERSION: u16 = 0;
 
 pub type PeerId = [u8; 16];
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct FileRequest {
-    pub sender_id: PeerId,
-    pub name: String,
-    pub file_size: usize,
-}
+/// Protobuff message wrapper to provide more ergonomic interface.
+#[derive(Debug, PartialEq, Clone)]
+pub struct LibredropMsg(protobuff::LibredropMsg);
 
-// TODO(povilas): replace with protobuff::LibredropMsg
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub enum LibredropMsg {
-    FileSendRequest(FileRequest),
-    FileAccept,
-    FileReject,
-    FileChunk(Vec<u8>),
+impl LibredropMsg {
+    /// Constructs FileRequest message.
+    pub fn file_request(sender_id: PeerId, file_name: String, file_size: u64) -> Self {
+        Self(protobuff::LibredropMsg {
+            variant: Some(libredrop_msg::Variant::FileRequest(protobuff::FileRequest {
+                sender_id: sender_id.to_vec(),
+                file_name,
+                file_size,
+            }))
+        })
+    }
+
+    pub fn file_chunk(data: Vec<u8>) -> Self {
+        Self(protobuff::LibredropMsg {
+            variant: Some(libredrop_msg::Variant::FileChunk(protobuff::FileChunk { content: data }))
+        })
+    }
+
+    pub fn file_accept() -> Self {
+        Self(protobuff::LibredropMsg {
+            variant: Some(libredrop_msg::Variant::FileAccept(protobuff::FileAccept { }))
+        })
+    }
+
+    pub fn file_reject() -> Self {
+        Self(protobuff::LibredropMsg {
+            variant: Some(libredrop_msg::Variant::FileReject(protobuff::FileReject { }))
+        })
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Self {
+        Self(unwrap!(protobuff::LibredropMsg::decode(data)))
+    }
+
+    pub fn to_bytes(&self) -> Bytes {
+        let mut out_buff = vec![];
+        unwrap!(self.0.encode(&mut out_buff));
+        Bytes::from(out_buff)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -66,9 +99,11 @@ transitions!(SenderSM,
 
 impl WaitingAccept {
     pub fn on_libredrop_msg(self, msg: LibredropMsg) -> SenderSM {
-        match msg {
-            LibredropMsg::FileAccept => SenderSM::SendingFile(SendingFile::new()),
-            LibredropMsg::FileReject => SenderSM::Rejected(Rejected {}),
+        use libredrop_msg::Variant;
+
+        match msg.0.variant {
+            Some(Variant::FileAccept(_)) => SenderSM::SendingFile(SendingFile::new()),
+            Some(Variant::FileReject(_)) => SenderSM::Rejected(Rejected {}),
             // TODO(povilas): add metadata to error state
             _ => SenderSM::Error,
         }
@@ -93,7 +128,7 @@ impl SendingFile {
 
     /// Returns next file chunk packet to send to the other peer.
     pub fn next_packet(&mut self) -> Option<LibredropMsg> {
-        self.data.pop().map(LibredropMsg::FileChunk)
+        self.data.pop().map(LibredropMsg::file_chunk)
     }
 }
 
@@ -151,12 +186,12 @@ pub struct WaitingFile {}
 
 impl WaitingFile {
     pub fn on_packet(self, packet: LibredropMsg) -> ReceiverSM {
-        match packet {
-            LibredropMsg::FileSendRequest(file_req) => {
+        match packet.0.variant {
+            Some(libredrop_msg::Variant::FileRequest(file_req)) => {
                 ReceiverSM::WaitingAccept(ReceiverWaitingAccept { file_req })
             }
-            other => ReceiverSM::Failed(Failed::with_error(Error::UnexpectedPacket(
-                other,
+            _ => ReceiverSM::Failed(Failed::with_error(Error::UnexpectedPacket(
+                packet,
                 "WaitingFile",
             ))),
         }
@@ -197,7 +232,7 @@ pub struct Accepted {
 
 impl Accepted {
     pub fn next_packet(&self) -> LibredropMsg {
-        LibredropMsg::FileAccept
+        LibredropMsg::file_accept()
     }
 
     pub fn transition(self) -> ReceivingFile {
@@ -211,7 +246,7 @@ pub struct ReceiverRejected {}
 
 impl ReceiverRejected {
     pub fn next_packet(&self) -> LibredropMsg {
-        LibredropMsg::FileReject
+        LibredropMsg::file_reject()
     }
 }
 
@@ -234,13 +269,14 @@ impl ReceivingFile {
 
     /// Extract received data buffer from packet.
     pub fn on_packet(mut self, packet: LibredropMsg) -> ReceiverSM {
-        match packet {
-            LibredropMsg::FileChunk(data) => {
+        match packet.0.variant {
+            Some(libredrop_msg::Variant::FileChunk(chunk)) => {
+                let data = chunk.content;
                 self.bytes_received += data.len();
                 self.data.push(data);
                 ReceiverSM::ReceivingFile(self)
             }
-            packet => ReceiverSM::Failed(Failed::with_error(Error::UnexpectedPacket(
+            _ => ReceiverSM::Failed(Failed::with_error(Error::UnexpectedPacket(
                 packet,
                 "ReceivingFile",
             ))),

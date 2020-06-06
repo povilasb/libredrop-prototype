@@ -19,8 +19,9 @@ bincode = "1.2.1"
 indicatif = "0.13.0"
 err-derive = "0.2.1"
 machine = "0.3.0"
-futures_codec = { git = 'https://github.com/povilasb/futures-codec', branch = 'serde-codec'}
+futures_codec = "0.4.0"
 prost = "0.6.1"
+bytes = "0.5.4"
 
 [build-dependencies]
 prost-build = "0.6.1"

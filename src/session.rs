@@ -3,7 +3,7 @@ use async_std::io::prelude::{ReadExt, WriteExt};
 use async_std::net::{SocketAddr, TcpStream};
 use async_std::{io, sync};
 use futures::{SinkExt, StreamExt};
-use futures_codec::{Framed, SerdeCodec};
+use futures_codec::{Framed, LengthCodec};
 use indicatif::{ProgressBar, ProgressStyle};
 use unwrap::unwrap;
 
@@ -21,30 +21,26 @@ pub async fn conn_send(
     our_id: PeerId,
 ) -> io::Result<SenderSM> {
     let f = File::open(file_path.clone()).await?;
-    let file_size = f.metadata().await?.len() as usize;
-    let file_request = FileRequest {
-        sender_id: our_id,
-        name: file_path,
-        file_size,
-    };
+    let file_size = f.metadata().await?.len();
 
     let stream = TcpStream::connect(peer_addr).await?;
-    let mut framed = Framed::new(stream, SerdeCodec::default());
+    let mut framed = Framed::new(stream, LengthCodec {});
 
     // TODO(povilas): accept FileRequest
     let sender_sm = SenderSM::waiting_accept();
-    // TODO(povilas): sender_sm.next_package()
-    framed
-        .send(LibredropMsg::FileSendRequest(file_request))
-        .await?;
+    // TODO(povilas): sender_sm.next_package() instead of constructing the packet myself here
+    let file_request = LibredropMsg::file_request(our_id, file_path, file_size);
 
-    if let Some(msg) = framed.next().await {
-        let msg = unwrap!(msg);
+    framed.send(file_request.to_bytes()).await?;
+
+    if let Some(res) = framed.next().await {
+        let msg_bytes = unwrap!(res);
+        let msg = LibredropMsg::from_bytes(&msg_bytes[..]);
         let sender_sm = sender_sm.on_libredrop_msg(msg);
         match sender_sm {
             SenderSM::SendingFile(state) => {
                 out!("File was accepted. Sending..");
-                let pb = make_progress_bar(file_size);
+                let pb = make_progress_bar(file_size as usize);
                 Ok(SenderSM::Done(send_file(framed, f, pb, state).await?))
             }
             other => Ok(other),
@@ -55,7 +51,7 @@ pub async fn conn_send(
 }
 
 async fn send_file(
-    mut framed: Framed<TcpStream, SerdeCodec<LibredropMsg>>,
+    mut framed: Framed<TcpStream, LengthCodec>,
     mut f: File,
     pb: ProgressBar,
     mut sender_state: SendingFile,
@@ -71,7 +67,7 @@ async fn send_file(
 
         // TODO(povilas): use send_all?
         let msg = unwrap!(sender_state.next_packet());
-        let _ = framed.send(msg).await?;
+        let _ = framed.send(msg.to_bytes()).await?;
         pb.inc(bytes_read as u64);
     }
 
@@ -91,15 +87,17 @@ pub async fn handle_incoming_conn(
     event_tx: sync::Sender<Event>,
     accept_rx: sync::Receiver<bool>,
 ) -> io::Result<ReceiverSM> {
-    let mut framed = Framed::new(stream, SerdeCodec::<LibredropMsg>::default());
+    let mut framed = Framed::new(stream, LengthCodec {});
     let mut receiver_sm = ReceiverSM::waiting_file();
     // TODO(povilas): think of ways to make this non-Optional
     let mut file_ctx: Option<FileCtx> = None;
 
     loop {
         match framed.next().await {
-            Some(packet) => {
-                receiver_sm = match receiver_sm.on_packet(packet?) {
+            Some(res) => {
+                let data = res?;
+                let packet = LibredropMsg::from_bytes(&data[..]);
+                receiver_sm = match receiver_sm.on_packet(packet) {
                     ReceiverSM::WaitingAccept(state) => {
                         event_tx
                             .send(Event::SetState(State::AwaitingFileAccept))
@@ -110,7 +108,7 @@ pub async fn handle_incoming_conn(
                         out!(
                             "{:?} wants to send '{}', size: {}. Accept? y/n: ",
                             hex::encode(&file_req.sender_id[0..5]),
-                            file_req.name,
+                            file_req.file_name,
                             file_req.file_size
                         );
 
@@ -125,15 +123,15 @@ pub async fn handle_incoming_conn(
                         // framed.next() awakes.
                         match state.on_accept(accepted) {
                             ReceiverSM::Accepted(state) => {
-                                let _ = framed.send(state.next_packet()).await?;
-                                let f = File::create("vault/".to_string() + &state.file_req.name)
+                                let _ = framed.send(state.next_packet().to_bytes()).await?;
+                                let f = File::create("vault/".to_string() + &state.file_req.file_name)
                                     .await?;
-                                let pb = make_progress_bar(state.file_req.file_size);
+                                let pb = make_progress_bar(state.file_req.file_size as usize);
                                 file_ctx = Some(FileCtx { pb, f });
                                 ReceiverSM::ReceivingFile(state.transition())
                             }
                             ReceiverSM::Rejected(state) => {
-                                let _ = framed.send(state.next_packet()).await?;
+                                let _ = framed.send(state.next_packet().to_bytes()).await?;
                                 receiver_sm = ReceiverSM::Rejected(state);
                                 break;
                             }
