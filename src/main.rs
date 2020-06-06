@@ -39,7 +39,6 @@ struct App {
     state: State,
 }
 
-
 #[async_std::main]
 async fn main() {
     unwrap!(simple_logger::init_with_level(log::Level::Info));

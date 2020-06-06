@@ -124,8 +124,9 @@ pub async fn handle_incoming_conn(
                         match state.on_accept(accepted) {
                             ReceiverSM::Accepted(state) => {
                                 let _ = framed.send(state.next_packet().to_bytes()).await?;
-                                let f = File::create("vault/".to_string() + &state.file_req.file_name)
-                                    .await?;
+                                let f =
+                                    File::create("vault/".to_string() + &state.file_req.file_name)
+                                        .await?;
                                 let pb = make_progress_bar(state.file_req.file_size as usize);
                                 file_ctx = Some(FileCtx { pb, f });
                                 ReceiverSM::ReceivingFile(state.transition())

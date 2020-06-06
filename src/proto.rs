@@ -1,10 +1,10 @@
 //! Networking protocol.
 
+use bytes::Bytes;
 use err_derive::Error;
 use machine::{machine, transitions};
 use prost::Message;
 use unwrap::unwrap;
-use bytes::Bytes;
 
 pub mod protobuff {
     include!(concat!(env!("OUT_DIR"), "/libredrop.message.rs"));
@@ -26,29 +26,33 @@ impl LibredropMsg {
     /// Constructs FileRequest message.
     pub fn file_request(sender_id: PeerId, file_name: String, file_size: u64) -> Self {
         Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileRequest(protobuff::FileRequest {
-                sender_id: sender_id.to_vec(),
-                file_name,
-                file_size,
-            }))
+            variant: Some(libredrop_msg::Variant::FileRequest(
+                protobuff::FileRequest {
+                    sender_id: sender_id.to_vec(),
+                    file_name,
+                    file_size,
+                },
+            )),
         })
     }
 
     pub fn file_chunk(data: Vec<u8>) -> Self {
         Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileChunk(protobuff::FileChunk { content: data }))
+            variant: Some(libredrop_msg::Variant::FileChunk(protobuff::FileChunk {
+                content: data,
+            })),
         })
     }
 
     pub fn file_accept() -> Self {
         Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileAccept(protobuff::FileAccept { }))
+            variant: Some(libredrop_msg::Variant::FileAccept(protobuff::FileAccept {})),
         })
     }
 
     pub fn file_reject() -> Self {
         Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileReject(protobuff::FileReject { }))
+            variant: Some(libredrop_msg::Variant::FileReject(protobuff::FileReject {})),
         })
     }
 
@@ -299,18 +303,20 @@ pub struct ReceiverDone {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protobuff::LibredropMsg;
-    use protobuff::libredrop_msg::Variant;
     use prost::Message;
+    use protobuff::libredrop_msg::Variant;
+    use protobuff::LibredropMsg;
 
     #[test]
     fn encode_decode_msg() {
         let my_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].to_vec();
 
         let mut msg = LibredropMsg::default();
-        msg.variant = Some(Variant::FileRequest(
-            protobuff::FileRequest{sender_id: my_id.clone(), file_name: "hello.txt".to_string(), file_size: 5}
-        ));
+        msg.variant = Some(Variant::FileRequest(protobuff::FileRequest {
+            sender_id: my_id.clone(),
+            file_name: "hello.txt".to_string(),
+            file_size: 5,
+        }));
 
         let mut out_buff = vec![];
         msg.encode_length_delimited(&mut out_buff).unwrap();
@@ -322,8 +328,8 @@ mod tests {
                 assert_eq!(file_req.sender_id, my_id);
                 assert_eq!(file_req.file_size, 5);
                 assert_eq!(file_req.file_name, "hello.txt".to_string());
-            },
-            other => panic!("Unexpected message: {:?}", other)
+            }
+            other => panic!("Unexpected message: {:?}", other),
         }
     }
 }
