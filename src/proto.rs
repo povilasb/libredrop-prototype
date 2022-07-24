@@ -3,66 +3,39 @@
 use bytes::Bytes;
 use err_derive::Error;
 use machine::{machine, transitions};
-use prost::Message;
-use unwrap::unwrap;
-
-pub mod protobuff {
-    include!(concat!(env!("OUT_DIR"), "/libredrop.message.rs"));
-}
-
-pub use protobuff::{libredrop_msg, FileRequest};
-
-/// Protocol version.
-/// 0 is prototype version - anything can break at any time.
-pub const VERSION: u16 = 0;
+use rmp_serde::{Deserializer, Serializer};
+use serde::{Deserialize, Serialize};
 
 pub type PeerId = [u8; 16];
 
-/// Protobuff message wrapper to provide more ergonomic interface.
-#[derive(Debug, PartialEq, Clone)]
-pub struct LibredropMsg(protobuff::LibredropMsg);
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct FileRequest {
+    pub sender_id: [u8; 16],
+    pub file_name: String,
+    pub file_size: u64,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub enum LibredropMsg {
+    FileSendReq(FileRequest),
+    FileAccept,
+    FileReject,
+    FileChunk(Vec<u8>),
+}
 
 impl LibredropMsg {
-    /// Constructs FileRequest message.
-    pub fn file_request(sender_id: PeerId, file_name: String, file_size: u64) -> Self {
-        Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileRequest(
-                protobuff::FileRequest {
-                    sender_id: sender_id.to_vec(),
-                    file_name,
-                    file_size,
-                },
-            )),
-        })
-    }
-
-    pub fn file_chunk(data: Vec<u8>) -> Self {
-        Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileChunk(protobuff::FileChunk {
-                content: data,
-            })),
-        })
-    }
-
-    pub fn file_accept() -> Self {
-        Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileAccept(protobuff::FileAccept {})),
-        })
-    }
-
-    pub fn file_reject() -> Self {
-        Self(protobuff::LibredropMsg {
-            variant: Some(libredrop_msg::Variant::FileReject(protobuff::FileReject {})),
-        })
-    }
-
     pub fn from_bytes(data: &[u8]) -> Self {
-        Self(unwrap!(protobuff::LibredropMsg::decode(data)))
+        //Self(unwrap!(protobuff::LibredropMsg::decode(data)))
+        // TODO: deser
+        LibredropMsg::FileAccept
     }
+
+    // TODO: encode length delimited
 
     pub fn to_bytes(&self) -> Bytes {
         let mut out_buff = vec![];
-        unwrap!(self.0.encode(&mut out_buff));
+        // Lets pretend serialization is unfallible.
+        self.serialize(&mut Serializer::new(&mut out_buff)).unwrap();
         Bytes::from(out_buff)
     }
 }
@@ -103,11 +76,9 @@ transitions!(SenderSM,
 
 impl WaitingAccept {
     pub fn on_libredrop_msg(self, msg: LibredropMsg) -> SenderSM {
-        use libredrop_msg::Variant;
-
-        match msg.0.variant {
-            Some(Variant::FileAccept(_)) => SenderSM::SendingFile(SendingFile::new()),
-            Some(Variant::FileReject(_)) => SenderSM::Rejected(Rejected {}),
+        match msg {
+            LibredropMsg::FileAccept => SenderSM::SendingFile(SendingFile::new()),
+            LibredropMsg::FileReject => SenderSM::Rejected(Rejected {}),
             // TODO(povilas): add metadata to error state
             _ => SenderSM::Error,
         }
@@ -132,7 +103,7 @@ impl SendingFile {
 
     /// Returns next file chunk packet to send to the other peer.
     pub fn next_packet(&mut self) -> Option<LibredropMsg> {
-        self.data.pop().map(LibredropMsg::file_chunk)
+        self.data.pop().map(LibredropMsg::FileChunk)
     }
 }
 
@@ -190,8 +161,8 @@ pub struct WaitingFile {}
 
 impl WaitingFile {
     pub fn on_packet(self, packet: LibredropMsg) -> ReceiverSM {
-        match packet.0.variant {
-            Some(libredrop_msg::Variant::FileRequest(file_req)) => {
+        match packet {
+            LibredropMsg::FileSendReq(file_req) => {
                 ReceiverSM::WaitingAccept(ReceiverWaitingAccept { file_req })
             }
             _ => ReceiverSM::Failed(Failed::with_error(Error::UnexpectedPacket(
@@ -236,7 +207,7 @@ pub struct Accepted {
 
 impl Accepted {
     pub fn next_packet(&self) -> LibredropMsg {
-        LibredropMsg::file_accept()
+        LibredropMsg::FileAccept
     }
 
     pub fn transition(self) -> ReceivingFile {
@@ -250,7 +221,7 @@ pub struct ReceiverRejected {}
 
 impl ReceiverRejected {
     pub fn next_packet(&self) -> LibredropMsg {
-        LibredropMsg::file_reject()
+        LibredropMsg::FileReject
     }
 }
 
@@ -273,9 +244,8 @@ impl ReceivingFile {
 
     /// Extract received data buffer from packet.
     pub fn on_packet(mut self, packet: LibredropMsg) -> ReceiverSM {
-        match packet.0.variant {
-            Some(libredrop_msg::Variant::FileChunk(chunk)) => {
-                let data = chunk.content;
+        match packet {
+            LibredropMsg::FileChunk(data) => {
                 self.bytes_received += data.len();
                 self.data.push(data);
                 ReceiverSM::ReceivingFile(self)
@@ -303,28 +273,21 @@ pub struct ReceiverDone {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prost::Message;
-    use protobuff::libredrop_msg::Variant;
-    use protobuff::LibredropMsg;
 
     #[test]
     fn encode_decode_msg() {
-        let my_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].to_vec();
+        let my_id = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
-        let mut msg = LibredropMsg::default();
-        msg.variant = Some(Variant::FileRequest(protobuff::FileRequest {
+        let msg = LibredropMsg::FileSendReq(FileRequest {
             sender_id: my_id.clone(),
             file_name: "hello.txt".to_string(),
             file_size: 5,
-        }));
+        });
+        let out_buff = msg.to_bytes();
 
-        let mut out_buff = vec![];
-        msg.encode_length_delimited(&mut out_buff).unwrap();
-
-        // Skip 1 byte since it's not part of the protobuff message.
-        let received_msg = LibredropMsg::decode(&out_buff[1..]).unwrap();
-        match received_msg.variant {
-            Some(Variant::FileRequest(file_req)) => {
+        let received_msg = LibredropMsg::from_bytes(&out_buff);
+        match received_msg {
+            LibredropMsg::FileSendReq(file_req) => {
                 assert_eq!(file_req.sender_id, my_id);
                 assert_eq!(file_req.file_size, 5);
                 assert_eq!(file_req.file_name, "hello.txt".to_string());

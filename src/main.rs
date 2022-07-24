@@ -28,7 +28,7 @@ struct App {
     tx: sync::Sender<Event>,
     rx: sync::Receiver<Event>,
 
-    /// When user confirmation is required, this is the channel to communicate user acction.
+    /// When user confirmation is required, this is the channel to communicate user action.
     accept_tx: sync::Sender<bool>,
     accept_rx: sync::Receiver<bool>,
 

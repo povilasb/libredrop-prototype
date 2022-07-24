@@ -29,7 +29,11 @@ pub async fn conn_send(
     // TODO(povilas): accept FileRequest
     let sender_sm = SenderSM::waiting_accept();
     // TODO(povilas): sender_sm.next_package() instead of constructing the packet myself here
-    let file_request = LibredropMsg::file_request(our_id, file_path, file_size);
+    let file_request = LibredropMsg::FileSendReq(FileRequest {
+        sender_id: our_id,
+        file_name: file_path,
+        file_size: file_size,
+    });
 
     framed.send(file_request.to_bytes()).await?;
 
